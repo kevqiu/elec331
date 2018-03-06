@@ -55,7 +55,9 @@ struct event *evlist = NULL;   /* the event list */
 #define ON              1
 #define A               0
 #define B               1
-#define NACK            -1
+
+#define WINDOW_SIZE     8
+#define TIMER           10
 
 #define DEBUG           1
 
@@ -68,94 +70,73 @@ void tolayer3(int AorB, struct pkt packet);
 void tolayer5(int AorB, char datasent[20]);
 
 /********* STUDENTS WRITE THE NEXT SEVEN ROUTINES *********/
-int TIMER = 100;
-struct pkt last_sent_packet; // save last sent packet in case we need to retransmit
+struct pkt buffer[50];
+int A_next_seqnum = 0;
+int A_base = 0;
+int B_expected_seqnum = 0;
+struct pkt B_send_packet;
 
-int A_ready = 0;
-int A_expected_ack = 0;
-int B_expected_ack = 0;
-int seqnum = 0;
-
-struct pkt create_packet(int acknum, struct msg message);
+struct pkt create_packet(int seqnum, int acknum, struct msg message);
 int create_checksum(struct pkt packet);
 int check_checksum(struct pkt packet);
-int flip(int value);
 void print_debugger(char* msg);
 void print_packet(struct pkt packet);
 
 /* called from layer 5, passed the data to be sent to other side */
 void A_output(struct msg message) {
-    // only send new data if sender is ready
-    if (A_ready == 1) {
-        A_ready = 0;
-        
-        struct pkt packet = create_packet(A_expected_ack, message);
-
+    if (A_next_seqnum < (A_base + WINDOW_SIZE)) {
         print_debugger("A IS SENDING A PACKET");
-        print_packet(packet);
+        struct pkt packet = create_packet(A_next_seqnum, 0, message);
+        print_packet(packet); 
+    
+        if (A_base == A_next_seqnum) {
+            starttimer(A, TIMER);
+        }
 
-        last_sent_packet = packet;
         tolayer3(A, packet);
-
-        starttimer(A, TIMER);
+        buffer[A_next_seqnum] = packet;
+        A_next_seqnum++;        
     }
     else {
-        print_debugger("A IS WAITING FOR RETURN FROM B, REFUSE DATA");
+        print_debugger("REFUSING DATA");
     }
 }
 
 void B_output(struct msg message) {  /* need be completed only for extra credit */
-    // :^)
 }
 
 /* called from layer 3, when a packet arrives for layer 4 */
 void A_input(struct pkt packet) {
-    // read ACK and checksum
     print_debugger("A HAS RECEIVED A PACKET");
-    // if packet acknum is correct and checksum is same then proceed to layer5
-    if (packet.acknum == A_expected_ack && check_checksum(packet)) {
-        print_debugger("A HAS RECEIEVED ACK FROM B");
-        stoptimer(A);
-        
-        A_ready = 1;
-
-        seqnum = flip(seqnum);
-        A_expected_ack = flip(A_expected_ack);
-
-        char message[20];
-        strcpy(message, packet.payload);
-
-        tolayer5(A, message);
-    }
-    // otherwise packet was NAK or corrupt
-    else {
-        stoptimer(A);
-
-        print_debugger("A HAS RECEIVED A -NACK- FROM B, RESENDING PACKET");
-        print_packet(last_sent_packet);
-        tolayer3(A, last_sent_packet);
-
-        starttimer(A, TIMER);        
+    if (check_checksum(packet)) {
+        print_debugger("A HAS RECEIVED AN ACK FROM B");
+        A_base = packet.acknum + 1;
+        if (A_base == A_next_seqnum) {
+            stoptimer(A);
+        }
+        else {
+            stoptimer(A);
+            starttimer(A, TIMER);
+        }
     }
 }
 
 /* called when A's timer goes off */
 void A_timerinterrupt() {
-    // if A is expecting a response and time out, resend
-    if (A_ready == 0) {
-        print_debugger("A HAS TIMED OUT, RESENDING PACKET"); 
-        print_packet(last_sent_packet);   
-        tolayer3(A, last_sent_packet);
-        starttimer(A, TIMER);        
+    print_debugger("A HAS TIMED OUT, RESENDING PAKCETS");
+    int i;
+    for (i = A_base; i < A_next_seqnum; i++) {
+        print_packet(buffer[i]);
+        tolayer3(A, buffer[i]);
     }
+    starttimer(A, TIMER);
 }  
 
 /* the following routine will be called once (only) before any other */
 /* entity A routines are called. You can use it to do any initialization */
 void A_init() {
-    A_ready = 1;
-    A_expected_ack = 0;
-    seqnum = 0;
+    int A_next_seqnum = 0;
+    int A_base = 0;
 }
 
 /* Note that with simplex transfer from a-to-B, there is no B_output() */
@@ -163,82 +144,64 @@ void A_init() {
 /* called from layer 3, when a packet arrives for layer 4 at B*/
 void B_input(struct pkt packet) {    
     print_debugger("B HAS RECEIVED A PACKET");
-    struct msg message;
-    strcpy(message.data, packet.payload);
+    if (check_checksum(packet)) {
+        if (packet.seqnum == B_expected_seqnum) {
+            print_debugger("B IS SENDING ACK TO A");
+            
+            B_send_packet.acknum = B_expected_seqnum;
+            B_send_packet.seqnum = 0;
+            memcpy(B_send_packet.payload, packet.payload, 20);
+            B_send_packet.checksum = create_checksum(B_send_packet);
 
-    // printf("message.data   : %s\n", message.data);
-    // printf("packet.payload : %s\n", packet.payload);
-    // printf("packet.checksum: %i\n", create_checksum(packet));
-    // printf("actual checksum: %i\n", packet.checksum);
-    // printf("acknum         : %i\n", packet.acknum);
+            print_packet(B_send_packet);
 
+            tolayer5(B, B_send_packet.payload);
+            tolayer3(B, B_send_packet);
 
-    if (packet.acknum == B_expected_ack && check_checksum(packet)) {
-        print_debugger("B IS SENDING ACK TO A");
-        struct pkt ack_packet = create_packet(B_expected_ack, message);
-        
-        print_packet(ack_packet);
-        tolayer5(B, message.data);
-        tolayer3(B, ack_packet);
-
-        B_expected_ack = flip(B_expected_ack);
-    }
-    else if (check_checksum(packet)) {
-        print_debugger("B IS SENDING DUPE ACK TO A");
-        struct pkt ack_packet = create_packet(packet.acknum, message);
-        print_packet(ack_packet);
-        tolayer3(B, ack_packet);
-    }
-    else {
-        print_debugger("B IS SENDING -NACK- TO A");
-        struct pkt nack_packet = create_packet(NACK, message);
-        print_packet(nack_packet);        
-        tolayer3(B, nack_packet);
+            B_expected_seqnum++;
+        }
+        else {
+            print_debugger("B IS SENDING DUPE ACK TO A");
+            print_packet(B_send_packet);       
+            tolayer3(B, B_send_packet);
+        }
     }
 }
 
 /* called when B's timer goes off */
 void B_timerinterrupt() {
-
 }
 
 /* the following routine will be called once (only) before any other */
 /* entity B routines are called. You can use it to do any initialization */
 void B_init() {
-    B_expected_ack = 0;
+    B_expected_seqnum = 0;
 }
 
 /******************** HELPER FUNCTIONS **********************/
 
-struct pkt create_packet(int acknum, struct msg message){
+struct pkt create_packet(int seqnum, int acknum, struct msg message) {
     struct pkt packet;
     
     packet.seqnum = seqnum;
     packet.acknum = acknum;
-    strcpy(packet.payload, message.data);
+    memcpy(packet.payload, message.data, 20);
     packet.checksum = create_checksum(packet);
 
     return packet;
 }
 
 int create_checksum(struct pkt packet) {
-    int checksum = 0, i;
-    for (i = 0; i < 10 && packet.payload[i] != '\0'; i++) {
+    int checksum = packet.acknum + packet.seqnum, i;
+    for (i = 0; i < 20 && packet.payload[i] != '\0'; i++) {
         checksum += (int)packet.payload[i];
-        //printf("%c\n", packet.payload[i]);
     }
-    checksum += packet.acknum;
-    checksum += packet.seqnum;
 
     return checksum;
 }
 
 int check_checksum(struct pkt packet) {
     return packet.checksum == create_checksum(packet);
-}
-
-int flip(int value) {
-    return value == 0 ? 1 : 0;
 }
 
 void print_debugger(char* msg) {

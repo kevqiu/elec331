@@ -122,10 +122,7 @@ void A_input(struct pkt packet) {
         seqnum = flip(seqnum);
         A_expected_ack = flip(A_expected_ack);
 
-        char message[20];
-        strcpy(message, packet.payload);
-
-        tolayer5(A, message);
+        tolayer5(A, packet.payload);
     }
     // otherwise packet was NAK or corrupt
     else {
@@ -165,13 +162,6 @@ void B_input(struct pkt packet) {
     print_debugger("B HAS RECEIVED A PACKET");
     struct msg message;
     strcpy(message.data, packet.payload);
-
-    // printf("message.data   : %s\n", message.data);
-    // printf("packet.payload : %s\n", packet.payload);
-    // printf("packet.checksum: %i\n", create_checksum(packet));
-    // printf("actual checksum: %i\n", packet.checksum);
-    // printf("acknum         : %i\n", packet.acknum);
-
 
     if (packet.acknum == B_expected_ack && check_checksum(packet)) {
         print_debugger("B IS SENDING ACK TO A");
@@ -223,7 +213,7 @@ struct pkt create_packet(int acknum, struct msg message){
 
 int create_checksum(struct pkt packet) {
     int checksum = 0, i;
-    for (i = 0; i < 10 && packet.payload[i] != '\0'; i++) {
+    for (i = 0; i < 20 && packet.payload[i] != '\0'; i++) {
         checksum += (int)packet.payload[i];
         //printf("%c\n", packet.payload[i]);
     }
